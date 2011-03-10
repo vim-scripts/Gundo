@@ -17,7 +17,10 @@ endif
 let loaded_gundo = 1"}}}
 
 if v:version < '703'"{{{
-    echo  "Gundo requires Vim 7.3+"
+    function! s:GundoDidNotLoad()
+        echohl WarningMsg|echomsg "Gundo unavailable: requires Vim 7.3+"|echohl None
+    endfunction
+    command! -nargs=0 GundoToggle call s:GundoDidNotLoad()
     finish
 endif"}}}
 
@@ -30,15 +33,15 @@ import vim
 if sys.version_info[:2] < (2, 4):
     vim.command('let s:has_supported_python = 0')
 ENDPYTHON
-
-    " Python version is too old
-    if !s:has_supported_python
-        echo  "Gundo requires that Vim be compiled with Python 2.4+"
-        finish
-    endif
 else
-    " no Python support
-    echo  "Gundo requires that Vim be compiled with Python 2.4+"
+    let s:has_supported_python = 0
+endif
+
+if !s:has_supported_python
+    function! s:GundoDidNotLoad()
+        echohl WarningMsg|echomsg "Gundo requires Vim to be compiled with Python 2.4+"|echohl None
+    endfunction
+    command! -nargs=0 GundoToggle call s:GundoDidNotLoad()
     finish
 endif"}}}
 
@@ -56,6 +59,12 @@ if !exists('g:gundo_right')"{{{
 endif"}}}
 if !exists('g:gundo_help')"{{{
     let g:gundo_help = 1
+endif"}}}
+if !exists("g:gundo_map_move_older")"{{{
+    let g:gundo_map_move_older = 'j'
+endif"}}}
+if !exists("g:gundo_map_move_newer")"{{{
+    let g:gundo_map_move_newer = 'k'
 endif"}}}
 
 "}}}
@@ -117,108 +126,6 @@ def draw_edges(edges, nodeline, interline):
             for i in range(2 * start + 1, 2 * end):
                 if nodeline[i] != "+":
                     nodeline[i] = "-"
-
-def ascii(buf, state, type, char, text, coldata):
-    """prints an ASCII graph of the DAG
-
-    takes the following arguments (one call per node in the graph):
-
-      - buffer to write to
-      - Somewhere to keep the needed state in (init to asciistate())
-      - Column of the current node in the set of ongoing edges.
-      - Type indicator of node data == ASCIIDATA.
-      - Payload: (char, lines):
-        - Character to use as node's symbol.
-        - List of lines to display as the node's text.
-      - Edges; a list of (col, next_col) indicating the edges between
-        the current node and its parents.
-      - Number of columns (ongoing edges) in the current revision.
-      - The difference between the number of columns (ongoing edges)
-        in the next revision and the number of columns (ongoing edges)
-        in the current revision. That is: -1 means one column removed;
-        0 means no columns added or removed; 1 means one column added.
-    """
-
-    idx, edges, ncols, coldiff = coldata
-    assert -2 < coldiff < 2
-    if coldiff == -1:
-        # Transform
-        #
-        #     | | |        | | |
-        #     o | |  into  o---+
-        #     |X /         |/ /
-        #     | |          | |
-        fix_long_right_edges(edges)
-
-    # add_padding_line says whether to rewrite
-    #
-    #     | | | |        | | | |
-    #     | o---+  into  | o---+
-    #     |  / /         |   | |  # <--- padding line
-    #     o | |          |  / /
-    #                    o | |
-    add_padding_line = (len(text) > 2 and coldiff == -1 and
-                        [x for (x, y) in edges if x + 1 < y])
-
-    # fix_nodeline_tail says whether to rewrite
-    #
-    #     | | o | |        | | o | |
-    #     | | |/ /         | | |/ /
-    #     | o | |    into  | o / /   # <--- fixed nodeline tail
-    #     | |/ /           | |/ /
-    #     o | |            o | |
-    fix_nodeline_tail = len(text) <= 2 and not add_padding_line
-
-    # nodeline is the line containing the node character (typically o)
-    nodeline = ["|", " "] * idx
-    nodeline.extend([char, " "])
-
-    nodeline.extend(
-        get_nodeline_edges_tail(idx, state[1], ncols, coldiff,
-                                state[0], fix_nodeline_tail))
-
-    # shift_interline is the line containing the non-vertical
-    # edges between this entry and the next
-    shift_interline = ["|", " "] * idx
-    if coldiff == -1:
-        n_spaces = 1
-        edge_ch = "/"
-    elif coldiff == 0:
-        n_spaces = 2
-        edge_ch = "|"
-    else:
-        n_spaces = 3
-        edge_ch = "\\"
-    shift_interline.extend(n_spaces * [" "])
-    shift_interline.extend([edge_ch, " "] * (ncols - idx - 1))
-
-    # draw edges from the current node to its parents
-    draw_edges(edges, nodeline, shift_interline)
-
-    # lines is the list of all graph lines to print
-    lines = [nodeline]
-    if add_padding_line:
-        lines.append(get_padding_line(idx, ncols, edges))
-    lines.append(shift_interline)
-
-    # make sure that there are as many graph lines as there are
-    # log strings
-    while len(text) < len(lines):
-        text.append("")
-    if len(lines) < len(text):
-        extra_interline = ["|", " "] * (ncols + coldiff)
-        while len(lines) < len(text):
-            lines.append(extra_interline)
-
-    # print lines
-    indentation_level = max(ncols, ncols + coldiff)
-    for (line, logstr) in zip(lines, text):
-        ln = "%-*s %s" % (2 * indentation_level, "".join(line), logstr)
-        buf.write(ln.rstrip() + '\n')
-
-    # ... and start over
-    state[0] = coldiff
-    state[1] = idx
 
 def fix_long_right_edges(edges):
     for (i, (start, end)) in enumerate(edges):
@@ -428,7 +335,7 @@ def _undo_to(n):
 
 
 INLINE_HELP = '''\
-" Gundo for %s [%d]
+" Gundo for %s (%d)
 " j/k  - move between undo states
 " p    - preview diff of selected and current states
 " <cr> - revert to selected state
@@ -525,9 +432,12 @@ endfunction"}}}
 "{{{ Gundo buffer settings
 
 function! s:GundoMapGraph()"{{{
+    exec 'nnoremap <script> <silent>' . g:gundo_map_move_older . " :call <sid>GundoMove(1)<CR>"
+    exec 'nnoremap <script> <silent>' . g:gundo_map_move_newer . " :call <sid>GundoMove(-1)<CR>"
     nnoremap <script> <silent> <buffer> <CR>          :call <sid>GundoRevert()<CR>
-    nnoremap <script> <silent> <buffer> j             :call <sid>GundoMove(1)<CR>
-    nnoremap <script> <silent> <buffer> k             :call <sid>GundoMove(-1)<CR>
+    nnoremap <script> <silent> <buffer> o             :call <sid>GundoRevert()<CR>
+    nnoremap <script> <silent> <buffer> <down>        :call <sid>GundoMove(1)<CR>
+    nnoremap <script> <silent> <buffer> <up>          :call <sid>GundoMove(-1)<CR>
     nnoremap <script> <silent> <buffer> gg            gg:call <sid>GundoMove(1)<CR>
     nnoremap <script> <silent> <buffer> P             :call <sid>GundoPlayTo()<CR>
     nnoremap <script> <silent> <buffer> p             :call <sid>GundoRenderChangePreview()<CR>
@@ -722,7 +632,12 @@ endfunction"}}}
 
 function! s:GundoMove(direction) range"{{{
     let start_line = getline('.')
-    let distance = 2 * v:count1
+    if v:count1 == 0
+        let move_count = 1
+    else
+        let move_count = v:count1
+    endif
+    let distance = 2 * move_count
 
     " If we're in between two nodes we move by one less to get back on track.
     if stridx(start_line, '[') == -1
