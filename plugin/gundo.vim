@@ -66,6 +66,9 @@ endif"}}}
 if !exists("g:gundo_map_move_newer")"{{{
     let g:gundo_map_move_newer = 'k'
 endif"}}}
+if !exists("g:gundo_close_on_revert")"{{{
+    let g:gundo_close_on_revert = 0
+endif"}}}
 
 "}}}
 
@@ -595,11 +598,19 @@ function! s:GundoClose()"{{{
 endfunction"}}}
 
 function! s:GundoOpen()"{{{
+    " Save `splitbelow` value and set it to default to avoid problems with
+    " positioning new windows.
+    let saved_splitbelow = &splitbelow
+    let &splitbelow = 0
+
     call s:GundoOpenPreview()
     exe bufwinnr(g:gundo_target_n) . "wincmd w"
 
     call s:GundoRenderGraph()
     call s:GundoRenderPreview()
+
+    " Restore `splitbelow` value.
+    let &splitbelow = saved_splitbelow
 endfunction"}}}
 
 function! s:GundoToggle()"{{{
@@ -883,6 +894,9 @@ def GundoRevert():
 
     vim.command('GundoRenderGraph')
     _goto_window_for_buffer(back)
+
+    if int(vim.eval('g:gundo_close_on_revert')):
+        vim.command('GundoToggle')
 
 GundoRevert()
 ENDPYTHON
